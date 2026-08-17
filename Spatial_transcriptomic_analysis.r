@@ -1,7 +1,6 @@
 #@@@@@@@@@@@@@@@@@@@@@@@
 # ==============================================================================
 # SPATIAL TRANSCRIPTOMICS MULTI-SAMPLE ANALYSIS PIPELINE
-# Adjusted & Corrected Production Script
 # ==============================================================================
 
 rm(list=ls())
@@ -12,7 +11,7 @@ library(stringi)
 library(SpotClean)
 library(S4Vectors)
 
-s_dir <- "/home/mekalav/Spatial/UABBCM/Input/spaceranger_outputs/"
+s_dir <- "/home/mekalav/Spatial/Input/spaceranger_outputs/"
 out_dir <- "/home/mekalav/Spatial/output/"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
@@ -56,7 +55,7 @@ rm(b01,b02,b03,b04,b05,b06,b07,b08,b09,b10,b11,w01,w02,w03,w04,w05,w06,w07,w08,w
 # ------------------------------------------------------------------------------
 # STEP 2: Demographic Metadata Mapping & QC Filtering
 # ------------------------------------------------------------------------------
-metadata <- read.csv("/home/mekalav/Spatial/UABBCM/Input/ADImetadata.csv", stringsAsFactors = FALSE)
+metadata <- read.csv("/home/mekalav/Spatial/Input/ADImetadata.csv", stringsAsFactors = FALSE)
 head(metadata)
 columns_to_add <- setdiff(colnames(metadata), "De_ID")
 for (col in columns_to_add) {
