@@ -141,3 +141,193 @@ SpatialFeaturePlot(
   alpha = 0.9
 ) + plot_annotation(title = "Comparative Spatial Cell Type Infiltration In Situ")
 dev.off()
+
+
+
+
+
+
+# ==============================================================================
+# CARD (Spatially-Informed Deconvolution)
+# CARD utilizes spatial (x,y) coordinates to account for spatial dependencies between neighboring Visium spots.
+# ==============================================================================
+library(CARD)
+library(Seurat)
+
+# 1. Extract raw spatial counts and tissue coordinates
+spatial_counts <- GetAssayData(combined_seurat, assay = "Spatial", layer = "counts")
+visium_coords <- GetTissueCoordinates(combined_seurat)
+spatial_coords <- data.frame(
+  x = visium_coords$x,
+  y = visium_coords$y,
+  row.names = rownames(visium_coords)
+)
+
+# 2. Extract single-cell reference counts and metadata
+sc_counts <- GetAssayData(sc_ref_seurat, assay = "RNA", layer = "counts")
+sc_meta <- data.frame(
+  cellID = colnames(sc_ref_seurat),
+  cellType = sc_ref_seurat$cell_type,
+  sampleID = "sc_reference",
+  row.names = colnames(sc_ref_seurat)
+)
+
+# 3. Create CARD Object and run deconvolution
+CARD_obj <- createCARDObject(
+  sc_count = sc_counts,
+  sc_meta = sc_meta,
+  spatial_count = spatial_counts,
+  spatial_location = spatial_coords,
+  ct.varname = "cellType",
+  ct.select = NULL,
+  sample.varname = "sampleID"
+)
+
+CARD_obj <- CARD_deconv(CARD_obj)
+
+# 4. Inject cell type proportions into Seurat
+card_weights <- CARD_obj@Proportion_ND
+combined_seurat[["CARD"]] <- CreateAssayObject(counts = t(card_weights))
+
+
+
+
+
+
+# ==============================================================================
+# SPOTlight (NMF + Non-Negative Least Squares)
+# SPOTlight identifies marker genes for each cell type in your single-cell reference and uses Non-Negative Matrix Factorization (NMF) to deconvolute spatial spots.
+# ==============================================================================
+library(SPOTlight)
+library(Seurat)
+
+# 1. Find marker genes for single-cell reference cell types
+Idents(sc_ref_seurat) <- "cell_type"
+sc_markers <- FindAllMarkers(
+  sc_ref_seurat, 
+  only.pos = TRUE, 
+  logfc.threshold = 0.25, 
+  min.pct = 0.25
+)
+
+# 2. Extract spatial counts matrix
+spatial_counts <- GetAssayData(combined_seurat, assay = "Spatial", layer = "counts")
+
+# 3. Run SPOTlight deconvolution
+spotlight_res <- spotlight_deconv(
+  se_sc = sc_ref_seurat,
+  counts_spatial = spatial_counts,
+  mks = sc_markers,
+  cluster_markers = "cluster",
+  cl_type = "cell_type"
+)
+
+# 4. Extract proportion matrix and inject into Seurat
+spotlight_weights <- spotlight_res$mat
+# Set spot barcodes as row names if missing
+rownames(spotlight_weights) <- colnames(combined_seurat)
+
+combined_seurat[["SPOTlight"]] <- CreateAssayObject(counts = t(spotlight_weights))
+
+
+
+
+
+
+
+
+
+# ==============================================================================
+# SpatialDecon (Log-Normal Regression)
+# SpatialDecon uses log-normal regression to fit single-cell reference expression profiles to spatial counts, making it resistant to background noise.
+# ==============================================================================
+library(SpatialDecon)
+library(Seurat)
+
+# 1. Build average gene expression matrix per cell type from reference
+sc_counts <- GetAssayData(sc_ref_seurat, assay = "RNA", layer = "counts")
+cell_types <- as.factor(sc_ref_seurat$cell_type)
+
+# Create mean expression matrix (genes x cell_types)
+ref_matrix <- make.neyt.matrix(
+  counts = as.matrix(sc_counts),
+  celltypes = cell_types
+)
+
+# 2. Extract raw spatial count matrix
+spatial_counts <- as.matrix(GetAssayData(combined_seurat, assay = "Spatial", layer = "counts"))
+
+# 3. Execute SpatialDecon
+spatialdecon_res <- spatialdecon(
+  norm = spatial_counts,
+  bg = 1, # Background noise cutoff
+  X = ref_matrix
+)
+
+# 4. Inject cell type fractions into Seurat
+spatialdecon_weights <- t(spatialdecon_res$prop_of_all)
+combined_seurat[["SpatialDecon"]] <- CreateAssayObject(counts = spatialdecon_weights)
+
+
+
+
+# ==============================================================================
+# Seurat Native Anchor Transfer (FindTransferAnchors)
+# Seurat's built-in label transfer uses Canonical Correlation Analysis (CCA) anchors to map single-cell identity probabilities onto spatial spots.
+# ==============================================================================
+library(Seurat)
+
+# 1. Ensure reference is normalized with SCTransform
+sc_ref_seurat <- SCTransform(sc_ref_seurat, verbose = FALSE)
+
+# 2. Find anchors between reference and spatial object
+anchors <- FindTransferAnchors(
+  reference = sc_ref_seurat,
+  query = combined_seurat,
+  normalization.method = "SCT",
+  recompute.residuals = FALSE
+)
+
+# 3. Transfer cell type probability scores
+predictions <- TransferData(
+  anchorset = anchors,
+  refdata = sc_ref_seurat$cell_type,
+  prediction.assay.name = "SeuratTransfer",
+  weight.reduction = combined_seurat[["pca"]],
+  dims = 1:30
+)
+
+# 4. Add predictions directly to Seurat object
+combined_seurat[["SeuratTransfer"]] <- predictions
+
+
+
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@ Comparing Visualizations Across Methods
+# Compare T-cell predictions across RCTD, CARD, and SPOTlight
+p1 <- SpatialFeaturePlot(combined_seurat, features = "RCTD_T-cells", images = "B01") + ggtitle("RCTD")
+p2 <- SpatialFeaturePlot(combined_seurat, features = "CARD_T-cells", images = "B01") + ggtitle("CARD")
+p3 <- SpatialFeaturePlot(combined_seurat, features = "SPOTlight_T-cells", images = "B01") + ggtitle("SPOTlight")
+
+p1 | p2 | p3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
