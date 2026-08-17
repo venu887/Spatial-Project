@@ -1,5 +1,3 @@
-
-
 # ==============================================================================
 # PIPELINE: RCTD CELL TYPE DECONVOLUTION ON VISIUM SPATIAL DATA
 # ==============================================================================
@@ -14,7 +12,7 @@ library(GEOquery)
 library(spacexr)
 
 out_dir <- "/home/mekalav/Spatial/output/"
-dir_path <- "/home/mekalav/Spatial/UABBCM/GSE176078"
+dir_path <- "/home/mekalav/Spatial/GSE176078"
 ext_path <- file.path(dir_path, "extracted/Wu_etal_2021_BRCA_scRNASeq")
 
 # Set global multi-threading options for compilation/download safety
