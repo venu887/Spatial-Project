@@ -11,7 +11,7 @@ This repository provides an end-to-end bioinformatics pipeline for spatial trans
 The workflow integrates multi-slice spatial dataset layers using **Seurat v5 (RPCA Integration)** and performs cell-type deconvolution via **Robust Cell Type Deconvolution (RCTD / spacexr)** using an un-normalized single-cell RNA-sequencing (scRNA-seq) reference.
 
 ## Key Features
-* **Multi-Sample Integration:** Merges and normalizes 22 + Visium spatial slides (~5000+ spatial spots: If more than 50k spots use sketch assay using SketchData() function) using `SCTransform v2` and `JoinLayers` architecture in Seurat v5.
+* **Multi-Sample Integration:** Merges and normalizes 22 + Visium spatial slides (~50000+ spatial spots: If more than 100k spots use sketch assay using SketchData() function) using `SCTransform v2` and `JoinLayers` architecture in Seurat v5.
 * **Cell-Type Mapping In Situ:** Maps high-resolution cell types (Cancer Epithelial, T-cells, Myeloid, CAFs, B-cells) to spatial tissue coordinates without downsampling raw UMI counts.
 * **Comparative Microenvironment Profiling:** Evaluates spatial infiltration patterns across demographic and clinical patient cohorts.
 
