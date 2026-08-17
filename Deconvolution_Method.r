@@ -1,0 +1,145 @@
+
+
+# ==============================================================================
+# PIPELINE: RCTD CELL TYPE DECONVOLUTION ON VISIUM SPATIAL DATA
+# ==============================================================================
+rm(list=ls())
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(corrplot)
+library(GEOquery)
+library(spacexr)
+
+out_dir <- "/home/mekalav/Spatial/output/"
+dir_path <- "/home/mekalav/Spatial/UABBCM/GSE176078"
+ext_path <- file.path(dir_path, "extracted/Wu_etal_2021_BRCA_scRNASeq")
+
+# Set global multi-threading options for compilation/download safety
+options(timeout = 600)
+Sys.setenv(MAKEFLAGS = "-j2")
+
+# ------------------------------------------------------------------------------
+# 1. DOWNLOAD, EXTRACT, AND PREPARE SINGLE-CELL REFERENCE (Wu et al. GSE176078)
+# ------------------------------------------------------------------------------
+message(">>> Loading Wu et al. Single-Cell Reference Data...")
+
+if (!file.exists(file.path(dir_path, "GSE176078_Wu_etal_2021_BRCA_scRNASeq.tar.gz"))) {
+  getGEOSuppFiles("GSE176078", fetch_files = TRUE, filter_regex = "BRCA_scRNASeq", baseDir = dir_path)
+}
+
+if (!dir.exists(ext_path)) {
+  tar_file <- file.path(dir_path, "GSE176078_Wu_etal_2021_BRCA_scRNASeq.tar.gz")
+  untar(tar_file, exdir = file.path(dir_path, "extracted"))
+}
+
+counts <- ReadMtx(
+  mtx = file.path(ext_path, "count_matrix_sparse.mtx"),
+  cells = file.path(ext_path, "count_matrix_barcodes.tsv"),
+  features = file.path(ext_path, "count_matrix_genes.tsv"),
+  feature.column = 1
+)
+
+metadata <- read.csv(file.path(ext_path, "metadata.csv"), row.names = 1)
+
+# Create reference Seurat object
+sc_ref <- CreateSeuratObject(counts = counts, meta.data = metadata)
+
+# Extract major cell types
+cell_types <- setNames(as.factor(sc_ref$celltype_major), colnames(sc_ref))
+
+# Filter rare cell populations (< 25 cells) to prevent RCTD errors
+cell_counts <- table(cell_types)
+valid_types <- names(cell_counts[cell_counts >= 25])
+keep_indices <- cell_types %in% valid_types
+
+# Apply filtering
+filtered_cell_types <- factor(cell_types[keep_indices])
+raw_counts <- GetAssayData(sc_ref, assay = "RNA", layer = "counts")[, keep_indices]
+nUMI <- colSums(raw_counts)
+
+# Build and save the RCTD Reference Object
+message(">>> Building RCTD single-cell reference framework...")
+rctd_reference <- Reference(counts = raw_counts, cell_types = filtered_cell_types, nUMI = nUMI)
+
+saveRDS(rctd_reference, file.path(dir_path, "matched_breast_scRNA_reference.rds"))
+# Free memory
+rm(sc_ref, counts, raw_counts, metadata); gc()
+
+# ------------------------------------------------------------------------------
+# 2. LOAD VISIUM SPATIAL DATA AND BUILD SPATIALRNA OBJECT (USING SCT ASSAY)
+# -----------------------------------------------------------------------------
+combined_seurat <- readRDS(file.path(out_dir, "integrated_data1.rds"))
+
+# Join layers 
+combined_seurat <- JoinLayers(combined_seurat, assay = "SCT")
+combined_seurat <- JoinLayers(combined_seurat, assay = "Spatial")
+
+# Extract raw counts
+visium_counts <- GetAssayData(combined_seurat, assay = "SCT", layer = "counts")
+
+# Extract and reformat tissue coordinates (must have columns 'x' and 'y')
+visium_coords <- GetTissueCoordinates(combined_seurat)
+spatial_coords <- data.frame(
+  x = visium_coords$x,
+  y = visium_coords$y,
+  row.names = rownames(visium_coords))
+
+spatial_nUMI <- colSums(visium_counts)
+
+# Build SpatialRNA Puck Object
+puck <- SpatialRNA(
+  coords = spatial_coords,
+  counts = visium_counts,
+  nUMI   = spatial_nUMI
+)
+
+# ------------------------------------------------------------------------------
+# 3. INITIALIZE AND EXECUTE RCTD DECONVOLUTION
+# ------------------------------------------------------------------------------
+my_RCTD <- create.RCTD(
+  spatialRNA = puck,
+  reference  = rctd_reference,
+  max_cores  = 4)
+
+# Run RCTD in full mode for Visium multi-cell spots
+my_RCTD <- run.RCTD(my_RCTD, doublet_mode = "full")
+
+# ------------------------------------------------------------------------------
+# 4. IMPORT PROPORTIONS BACK INTO SEURAT OBJECT AND SAVE
+# ------------------------------------------------------------------------------
+# Extract weights and normalize rows to proportions summing to 1
+weights_matrix <- as.matrix(my_RCTD@results$weights)
+norm_weights <- sweep(weights_matrix, 1, rowSums(weights_matrix), "/")
+# Create new Assay containing cell-type proportions (Seurat v5 matrix format)
+proportions_assay <- CreateAssayObject(counts = t(norm_weights))
+# Inject into Seurat object FIRST, then set as DefaultAssay
+combined_seurat[["RCTD"]] <- proportions_assay
+DefaultAssay(combined_seurat) <- "RCTD"
+
+# Save updated integrated dataset
+saveRDS(combined_seurat, file.path(out_dir, "final_integrated_deconvolved.rds"))
+message(">>> Saved successfully to final_integrated_deconvolved.rds")
+
+# ------------------------------------------------------------------------------
+# 5. GENERATE SPATIAL FEATURE VISUALIZATIONS
+# ------------------------------------------------------------------------------
+# Check available deconvolved cell types
+available_celltypes <- rownames(combined_seurat[["RCTD"]])
+print(available_celltypes)
+
+# Define cell types to map
+target_profiles <- c("Myeloid", "T-cells")
+
+pdf(file.path(out_dir, "Fig6_Spatial_Cell_Type_Deconvolution_Maps.pdf"), width = 14, height = 12)
+SpatialFeaturePlot(
+  object = combined_seurat,
+  features = target_profiles,
+  images = c("B01", "W01"), # Direct visual comparison between Black and White cohort samples
+  ncol = 2,
+  pt.size.factor = 1.5,
+  alpha = 0.9
+) + plot_annotation(title = "Comparative Spatial Cell Type Infiltration In Situ")
+dev.off()
